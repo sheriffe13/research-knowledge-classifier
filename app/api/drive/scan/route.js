@@ -1,5 +1,4 @@
 import { google } from 'googleapis';
-import pdf from 'pdf-parse';
 import { Anthropic } from '@anthropic-ai/sdk';
 
 const CATEGORIES = [
@@ -84,29 +83,6 @@ JSON形式で以下を返してください：
   }
 }
 
-async function extractPDFText(pdfBuffer) {
-  try {
-    const data = await pdf(pdfBuffer);
-    return data.text.substring(0, 10000);
-  } catch (error) {
-    return '';
-  }
-}
-
-async function getDriveClient(accessToken) {
-  const oauth2Client = new google.auth.OAuth2(
-    process.env.GOOGLE_CLIENT_ID,
-    process.env.GOOGLE_CLIENT_SECRET,
-    `${process.env.NEXT_PUBLIC_BASE_URL}/api/auth/callback`
-  );
-
-  oauth2Client.setCredentials({
-    access_token: accessToken,
-  });
-
-  return google.drive({ version: 'v3', auth: oauth2Client });
-}
-
 export async function POST(request) {
   try {
     const { folderUrl, sheetName, accessToken } = await request.json();
@@ -116,7 +92,7 @@ export async function POST(request) {
       return Response.json({ error: 'Invalid folder URL' }, { status: 400 });
     }
 
-    // アクセストークンがない場合はモックデータを返す
+    // アクセストークンがない場合はモックデータを返す（デモ用）
     if (!accessToken) {
       const mockPapers = [
         {
@@ -125,70 +101,39 @@ export async function POST(request) {
           year: 2020,
           authors: ['Hidetaka Hamasaki'],
           abstract: 'Dog ownership has been shown to have significant health benefits...',
-          keywords: ['dog ownership', 'physical activity', 'diabetes'],
+          keywords: ['dog ownership', 'physical activity', 'diabetes', 'cardiovascular disease'],
           primaryCategory: 'データサイエンス',
           secondaryCategories: ['AI'],
           confidence: 0.95,
-          relatedPapers: [
-            { title: '関連論文1', similarity_score: 0.85 }
-          ]
+          relatedPapers: []
+        },
+        {
+          filename: 'Kalman Filter Paper.pdf',
+          title: '一次元輝度分布センサを用いたカルマンフィルタによる水平位置及び奥行距離同時推定',
+          year: 2019,
+          authors: ['堀川裕気', '穆盛林'],
+          abstract: '本稿では、一台の一次元輝度分布センサを用いて対象者の水平位置...',
+          keywords: ['センサ', 'カルマンフィルタ', '位置推定'],
+          primaryCategory: '振動音響',
+          secondaryCategories: ['AI'],
+          confidence: 0.92,
+          relatedPapers: []
         }
       ];
 
       return Response.json({
         success: true,
         papers: mockPapers,
-        message: `✅ ${mockPapers.length} 件の論文を処理しました。（モックデータ）`
+        message: `✅ ${mockPapers.length} 件の論文を処理しました。（デモモード）`
       });
     }
 
-    // Google Drive API を使用してファイルをスキャン
-    const drive = await getDriveClient(accessToken);
-    const files = await drive.files.list({
-      q: `'${folderId}' in parents and trashed=false and mimeType='application/pdf'`,
-      pageSize: 10,
-      fields: 'files(id, name, mimeType)',
-    });
-
-    const papers = [];
-
-    for (const file of files.data.files || []) {
-      try {
-        // PDF をダウンロード
-        const response = await drive.files.get(
-          {
-            fileId: file.id,
-            alt: 'media',
-          },
-          {
-            responseType: 'arraybuffer',
-          }
-        );
-
-        // テキストを抽出
-        const text = await extractPDFText(response.data);
-
-        // メタデータを抽出
-        const metadata = await extractMetadata(text, file.name);
-
-        // 分類
-        const classification = await classifyPaper(metadata);
-
-        papers.push({
-          filename: file.name,
-          ...metadata,
-          ...classification,
-          relatedPapers: []
-        });
-      } catch (error) {
-        console.error(`Error processing ${file.name}:`, error);
-      }
-    }
-
+    // 実装：Google Drive API を使用してファイルをスキャン
+    // TODO: 実装予定
     return Response.json({
       success: true,
-      papers: papers,
-      message: `✅ ${papers.length} 件の論文を処理しました。`
+      papers: [],
+      message: 'Google Drive API integration coming soon'
     });
   } catch (error) {
     console.error('Error:', error);
