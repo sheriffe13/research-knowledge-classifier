@@ -7,6 +7,8 @@ export default function Home() {
   const [loading, setLoading] = useState(false);
   const [results, setResults] = useState([]);
   const [folderUrl, setFolderUrl] = useState('https://drive.google.com/drive/folders/1lGygq45cqR1BNrRtNrzwsaaEMkpYqzOT');
+  const [spreadsheetId, setSpreadsheetId] = useState('');
+  const [spreadsheetName, setSpreadsheetName] = useState('Research Papers');
   const [sheetName, setSheetName] = useState('Journals');
   const [accessToken, setAccessToken] = useState('');
   const [isAuthenticated, setIsAuthenticated] = useState(false);
@@ -60,6 +62,8 @@ export default function Home() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           folderUrl,
+          spreadsheetId: spreadsheetId || null,
+          spreadsheetName,
           sheetName,
           accessToken: accessToken || null
         })
@@ -72,6 +76,13 @@ export default function Home() {
       } else {
         setStatus(`✅ ${data.message}`);
         setResults(data.papers || []);
+        
+        // 保存先 Sheets URL を表示
+        if (data.spreadsheetId) {
+          setSpreadsheetId(data.spreadsheetId);
+          const sheetsUrl = `https://docs.google.com/spreadsheets/d/${data.spreadsheetId}/edit`;
+          setStatus(`✅ ${data.message}\n\n📊 保存先: ${sheetsUrl}`);
+        }
       }
     } catch (error) {
       setStatus(`❌ エラー: ${error.message}`);
@@ -110,16 +121,48 @@ export default function Home() {
             onChange={(e) => setFolderUrl(e.target.value)}
             placeholder="https://drive.google.com/drive/folders/..."
           />
+          <p style={{ fontSize: '12px', color: '#718096', marginTop: '4px' }}>
+            スキャンする論文が保存されているフォルダの URL
+          </p>
         </div>
 
         <div style={{ marginBottom: '20px' }}>
-          <label>Google Sheet 名</label>
+          <label>Google Sheet 保存先 ID（オプション）</label>
+          <input 
+            type="text" 
+            value={spreadsheetId}
+            onChange={(e) => setSpreadsheetId(e.target.value)}
+            placeholder="1a2b3c4d5e6f7g8h9i0j..."
+          />
+          <p style={{ fontSize: '12px', color: '#718096', marginTop: '4px' }}>
+            既存の Sheets ID を指定すると、そこにデータが追記されます。空白の場合は新規作成
+          </p>
+        </div>
+
+        <div style={{ marginBottom: '20px' }}>
+          <label>Google Sheet 名（新規作成の場合）</label>
+          <input 
+            type="text" 
+            value={spreadsheetName}
+            onChange={(e) => setSpreadsheetName(e.target.value)}
+            placeholder="Research Papers"
+          />
+          <p style={{ fontSize: '12px', color: '#718096', marginTop: '4px' }}>
+            新しく Sheets を作成する場合のファイル名
+          </p>
+        </div>
+
+        <div style={{ marginBottom: '20px' }}>
+          <label>Sheet シート名</label>
           <input 
             type="text" 
             value={sheetName}
             onChange={(e) => setSheetName(e.target.value)}
             placeholder="Journals"
           />
+          <p style={{ fontSize: '12px', color: '#718096', marginTop: '4px' }}>
+            Sheets 内のシート（タブ）の名前
+          </p>
         </div>
       </div>
 
@@ -142,7 +185,18 @@ export default function Home() {
             status.includes('✅') ? 'success' : 
             status.includes('❌') ? 'error' : 'loading'
           }`}>
-            {status}
+            {status.split('\n').map((line, i) => (
+              <div key={i}>
+                {line.includes('https://') ? (
+                  <a href={line.split(': ')[1]} target="_blank" rel="noopener noreferrer" 
+                     style={{ color: '#667eea', textDecoration: 'underline' }}>
+                    📊 Google Sheets を開く
+                  </a>
+                ) : (
+                  line
+                )}
+              </div>
+            ))}
           </div>
         )}
       </div>
@@ -197,9 +251,11 @@ export default function Home() {
         <div className="section-title">ℹ️ 使い方</div>
         <p style={{ color: '#666', fontSize: '14px', lineHeight: '1.8' }}>
           1. <strong>「Google で認証」</strong> をクリックして Google アカウントにログイン<br/>
-          2. Google Drive フォルダ URL と Google Sheet 名を確認<br/>
+          2. Google Drive フォルダ URL と Sheets の保存先を設定<br/>
           3. <strong>「スキャン & 分類を実行」</strong> をクリック<br/>
-          4. 論文メタデータが自動抽出され、Google Sheets に保存されます
+          4. 論文メタデータが自動抽出され、Google Sheets に保存されます<br/>
+          <br/>
+          <strong>💡 ヒント：</strong> Sheets ID を指定しない場合、新しいファイルが自動作成されます
         </p>
       </div>
     </div>
