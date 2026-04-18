@@ -92,7 +92,7 @@ export async function POST(request) {
       return Response.json({ error: 'Invalid folder URL' }, { status: 400 });
     }
 
-    // アクセストークンがない場合はモックデータを返す（デモ用）
+    // デモモード：アクセストークンがない場合
     if (!accessToken) {
       const mockPapers = [
         {
@@ -101,7 +101,7 @@ export async function POST(request) {
           year: 2020,
           authors: ['Hidetaka Hamasaki'],
           abstract: 'Dog ownership has been shown to have significant health benefits...',
-          keywords: ['dog ownership', 'physical activity', 'diabetes', 'cardiovascular disease'],
+          keywords: ['dog ownership', 'physical activity', 'diabetes'],
           primaryCategory: 'データサイエンス',
           secondaryCategories: ['AI'],
           confidence: 0.95,
@@ -112,7 +112,7 @@ export async function POST(request) {
           title: '一次元輝度分布センサを用いたカルマンフィルタによる水平位置及び奥行距離同時推定',
           year: 2019,
           authors: ['堀川裕気', '穆盛林'],
-          abstract: '本稿では、一台の一次元輝度分布センサを用いて対象者の水平位置...',
+          abstract: '本稿では、一台の一次元輝度分布センサを用いて...',
           keywords: ['センサ', 'カルマンフィルタ', '位置推定'],
           primaryCategory: '振動音響',
           secondaryCategories: ['AI'],
@@ -124,16 +124,56 @@ export async function POST(request) {
       return Response.json({
         success: true,
         papers: mockPapers,
-        message: `✅ ${mockPapers.length} 件の論文を処理しました。（デモモード）`
+        message: `✅ ${mockPapers.length} 件の論文を処理しました。（デモモード）`,
+        sheetUrl: `Google Sheets 統合は本番モードで機能します`
       });
     }
 
-    // 実装：Google Drive API を使用してファイルをスキャン
-    // TODO: 実装予定
+    // 本番モード：Google Drive & Sheets API を使用
+    const oauth2Client = new google.auth.OAuth2(
+      process.env.GOOGLE_CLIENT_ID,
+      process.env.GOOGLE_CLIENT_SECRET,
+      `${process.env.NEXT_PUBLIC_BASE_URL}/api/auth/callback`
+    );
+
+    oauth2Client.setCredentials({
+      access_token: accessToken,
+    });
+
+    const drive = google.drive({ version: 'v3', auth: oauth2Client });
+    const sheets = google.sheets({ version: 'v4', auth: oauth2Client });
+
+    // Google Drive からファイルをスキャン
+    const files = await drive.files.list({
+      q: `'${folderId}' in parents and trashed=false and mimeType='application/pdf'`,
+      pageSize: 10,
+      fields: 'files(id, name)',
+    });
+
+    const papers = [];
+
+    for (const file of files.data.files || []) {
+      try {
+        papers.push({
+          filename: file.name,
+          title: file.name.replace('.pdf', ''),
+          year: 'Unknown',
+          authors: [],
+          abstract: '（実装予定）',
+          keywords: [],
+          primaryCategory: 'データサイエンス',
+          relatedPapers: []
+        });
+      } catch (error) {
+        console.error(`Error processing ${file.name}:`, error);
+      }
+    }
+
     return Response.json({
       success: true,
-      papers: [],
-      message: 'Google Drive API integration coming soon'
+      papers: papers,
+      message: `✅ ${papers.length} 件の論文を検出しました。`,
+      note: 'Google Sheets 統合は完全版で実装されます'
     });
   } catch (error) {
     console.error('Error:', error);
