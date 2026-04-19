@@ -12,6 +12,7 @@ export default function Home() {
   const [sheetName, setSheetName] = useState('Journals');
   const [accessToken, setAccessToken] = useState('');
   const [isAuthenticated, setIsAuthenticated] = useState(false);
+  const [sheetsUrl, setSheetsUrl] = useState('');
 
   useEffect(() => {
     const params = new URLSearchParams(window.location.search);
@@ -56,6 +57,7 @@ export default function Home() {
     try {
       setLoading(true);
       setStatus('📂 Google Drive をスキャン中...');
+      setSheetsUrl('');
       
       const response = await fetch('/api/drive/scan', {
         method: 'POST',
@@ -68,7 +70,16 @@ export default function Home() {
           accessToken: accessToken || null
         })
       });
-      
+
+      // ステータスコードを確認
+      if (!response.ok) {
+        const errorText = await response.text();
+        console.error('API Error:', response.status, errorText);
+        setStatus(`❌ エラー: API エラー (${response.status})`);
+        return;
+      }
+
+      // JSON をパース
       const data = await response.json();
       
       if (data.error) {
@@ -77,14 +88,14 @@ export default function Home() {
         setStatus(`✅ ${data.message}`);
         setResults(data.papers || []);
         
-        // 保存先 Sheets URL を表示
         if (data.spreadsheetId) {
           setSpreadsheetId(data.spreadsheetId);
-          const sheetsUrl = `https://docs.google.com/spreadsheets/d/${data.spreadsheetId}/edit`;
-          setStatus(`✅ ${data.message}\n\n📊 保存先: ${sheetsUrl}`);
+          const url = `https://docs.google.com/spreadsheets/d/${data.spreadsheetId}/edit`;
+          setSheetsUrl(url);
         }
       }
     } catch (error) {
+      console.error('Fetch error:', error);
       setStatus(`❌ エラー: ${error.message}`);
     } finally {
       setLoading(false);
@@ -121,9 +132,6 @@ export default function Home() {
             onChange={(e) => setFolderUrl(e.target.value)}
             placeholder="https://drive.google.com/drive/folders/..."
           />
-          <p style={{ fontSize: '12px', color: '#718096', marginTop: '4px' }}>
-            スキャンする論文が保存されているフォルダの URL
-          </p>
         </div>
 
         <div style={{ marginBottom: '20px' }}>
@@ -134,9 +142,6 @@ export default function Home() {
             onChange={(e) => setSpreadsheetId(e.target.value)}
             placeholder="1a2b3c4d5e6f7g8h9i0j..."
           />
-          <p style={{ fontSize: '12px', color: '#718096', marginTop: '4px' }}>
-            既存の Sheets ID を指定すると、そこにデータが追記されます。空白の場合は新規作成
-          </p>
         </div>
 
         <div style={{ marginBottom: '20px' }}>
@@ -147,9 +152,6 @@ export default function Home() {
             onChange={(e) => setSpreadsheetName(e.target.value)}
             placeholder="Research Papers"
           />
-          <p style={{ fontSize: '12px', color: '#718096', marginTop: '4px' }}>
-            新しく Sheets を作成する場合のファイル名
-          </p>
         </div>
 
         <div style={{ marginBottom: '20px' }}>
@@ -160,16 +162,13 @@ export default function Home() {
             onChange={(e) => setSheetName(e.target.value)}
             placeholder="Journals"
           />
-          <p style={{ fontSize: '12px', color: '#718096', marginTop: '4px' }}>
-            Sheets 内のシート（タブ）の名前
-          </p>
         </div>
       </div>
 
       <div className="section">
         <div className="section-title">🚀 ステップ 3: スキャン & 分類</div>
         <p style={{ marginBottom: '16px', color: '#666', fontSize: '14px' }}>
-          Google Drive をスキャンして、論文メタデータを抽出・分類・Google Sheets に保存します。
+          Google Drive をスキャンして、論文メタデータを抽出・Google Sheets に保存します。
         </p>
         <button 
           className="btn-primary" 
@@ -185,18 +184,42 @@ export default function Home() {
             status.includes('✅') ? 'success' : 
             status.includes('❌') ? 'error' : 'loading'
           }`}>
-            {status.split('\n').map((line, i) => (
-              <div key={i}>
-                {line.includes('https://') ? (
-                  <a href={line.split(': ')[1]} target="_blank" rel="noopener noreferrer" 
-                     style={{ color: '#667eea', textDecoration: 'underline' }}>
-                    📊 Google Sheets を開く
-                  </a>
-                ) : (
-                  line
-                )}
-              </div>
-            ))}
+            <p>{status}</p>
+          </div>
+        )}
+
+        {sheetsUrl && (
+          <div style={{
+            marginTop: '16px',
+            padding: '16px',
+            background: '#f0f9ff',
+            border: '2px solid #667eea',
+            borderRadius: '8px',
+            textAlign: 'center'
+          }}>
+            <p style={{ color: '#2d3748', marginBottom: '12px', fontWeight: '600' }}>
+              📊 Google Sheets に保存されました！
+            </p>
+            <a 
+              href={sheetsUrl}
+              target="_blank"
+              rel="noopener noreferrer"
+              style={{
+                display: 'inline-block',
+                padding: '12px 24px',
+                background: '#667eea',
+                color: 'white',
+                textDecoration: 'none',
+                borderRadius: '6px',
+                fontWeight: '600',
+                cursor: 'pointer'
+              }}
+            >
+              🔗 Google Sheets を開く
+            </a>
+            <p style={{ fontSize: '12px', color: '#718096', marginTop: '12px' }}>
+              {sheetsUrl}
+            </p>
           </div>
         )}
       </div>
@@ -234,13 +257,6 @@ export default function Home() {
                     <span style={{ marginLeft: '8px', color: '#667eea' }}>{paper.primaryCategory}</span>
                   </div>
                 )}
-
-                {paper.abstract && (
-                  <div style={{ marginTop: '12px', fontSize: '13px', color: '#666' }}>
-                    <span style={{ fontWeight: '600' }}>概要:</span>
-                    <p style={{ marginTop: '8px', lineHeight: '1.5' }}>{paper.abstract}</p>
-                  </div>
-                )}
               </div>
             ))}
           </div>
@@ -250,12 +266,10 @@ export default function Home() {
       <div className="section" style={{ borderBottom: 'none' }}>
         <div className="section-title">ℹ️ 使い方</div>
         <p style={{ color: '#666', fontSize: '14px', lineHeight: '1.8' }}>
-          1. <strong>「Google で認証」</strong> をクリックして Google アカウントにログイン<br/>
-          2. Google Drive フォルダ URL と Sheets の保存先を設定<br/>
+          1. <strong>「Google で認証」</strong> をクリック<br/>
+          2. Google Drive フォルダ URL を確認<br/>
           3. <strong>「スキャン & 分類を実行」</strong> をクリック<br/>
-          4. 論文メタデータが自動抽出され、Google Sheets に保存されます<br/>
-          <br/>
-          <strong>💡 ヒント：</strong> Sheets ID を指定しない場合、新しいファイルが自動作成されます
+          4. 論文メタデータが Google Sheets に自動保存されます
         </p>
       </div>
     </div>
