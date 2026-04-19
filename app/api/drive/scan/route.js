@@ -1,7 +1,4 @@
 import { google } from 'googleapis';
-import { Anthropic } from '@anthropic-ai/sdk';
-
-const anthropic = new Anthropic();
 
 async function getDriveClient(accessToken) {
   const oauth2Client = new google.auth.OAuth2(
@@ -23,57 +20,87 @@ async function getSheetsClient(accessToken) {
   return google.sheets({ version: 'v4', auth: oauth2Client });
 }
 
-async function extractMetadataFromFilename(filename) {
+async function extractMetadataWithClaude(filename) {
   try {
-    console.log('Extracting metadata from filename:', filename);
+    const apiKey = process.env.ANTHROPIC_API_KEY;
+    if (!apiKey) {
+      console.error('ANTHROPIC_API_KEY is not set');
+      return extractMetadataBasic(filename);
+    }
 
-    const prompt = `以下はPDF論文のファイル名です。ファイル名から論文のメタデータを推測してください：
+    const prompt = `以下は論文のファイル名です。JSON形式で返してください。
 
-ファイル名：${filename}
+ファイル名: ${filename}
 
-以下のJSON形式で返答してください。他の説明は不要です。
 {
-  "year": 論文の推定発行年または "Unknown",
-  "authors": ["著者1"],
-  "abstract": "ファイル名から推測される論文の概要",
+  "year": "発行年（4桁の数字、分からなければnull）",
+  "authors": ["著者1", "著者2"],
   "keywords": ["キーワード1", "キーワード2", "キーワード3"]
-}
+}`;
 
-注意：
-- yearは4桁の数字またはUnknown
-- authorsは配列
-- 有効なJSONのみを返してください`;
-
-    const message = await anthropic.messages.create({
-      model: 'claude-opus-4-20250805',
-      max_tokens: 300,
-      messages: [{ role: 'user', content: prompt }]
+    const response = await fetch('https://api.anthropic.com/v1/messages', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'x-api-key': apiKey,
+        'anthropic-version': '2023-06-01'
+      },
+      body: JSON.stringify({
+        model: 'claude-opus-4-20250805',
+        max_tokens: 200,
+        messages: [{ role: 'user', content: prompt }]
+      })
     });
 
-    const jsonStr = message.content[0].text.trim();
-    const metadata = JSON.parse(jsonStr);
-    
+    if (!response.ok) {
+      const error = await response.json();
+      console.error('Claude API error:', error);
+      return extractMetadataBasic(filename);
+    }
+
+    const data = await response.json();
+    const text = data.content[0].text;
+
+    // JSON を抽出
+    const jsonMatch = text.match(/\{[\s\S]*\}/);
+    if (!jsonMatch) {
+      return extractMetadataBasic(filename);
+    }
+
+    const metadata = JSON.parse(jsonMatch[0]);
+
     return {
       year: metadata.year || 'Unknown',
       authors: metadata.authors || [],
-      abstract: metadata.abstract || '',
+      abstract: `論文: ${filename.replace('.pdf', '')}`,
       keywords: metadata.keywords || []
     };
   } catch (error) {
-    console.error('Metadata extraction error:', error.message);
-    return {
-      year: 'Unknown',
-      authors: [],
-      abstract: 'メタデータ抽出エラー',
-      keywords: []
-    };
+    console.error('Claude API error:', error.message);
+    return extractMetadataBasic(filename);
   }
+}
+
+function extractMetadataBasic(filename) {
+  const title = filename.replace('.pdf', '');
+  const yearMatch = filename.match(/(\d{4})/);
+  const year = yearMatch ? yearMatch[1] : 'Unknown';
+  
+  const keywords = title
+    .split(/[_-\s]+/)
+    .filter(word => word.length > 2 && !/^\d+$/.test(word))
+    .slice(0, 5);
+  
+  return {
+    year: year,
+    authors: ['(抽出予定)'],
+    abstract: `論文: ${title}`,
+    keywords: keywords
+  };
 }
 
 async function createSpreadsheetWithSheet(sheets, spreadsheetName, sheetName) {
   try {
-    console.log('Creating spreadsheet:', spreadsheetName);
-    
     const response = await sheets.spreadsheets.create({
       requestBody: {
         properties: { title: spreadsheetName },
@@ -106,7 +133,6 @@ export async function POST(request) {
       return Response.json({ error: 'Invalid folder URL', success: false }, { status: 400 });
     }
 
-    // デモモード
     if (!accessToken) {
       return Response.json({
         success: true,
@@ -115,15 +141,14 @@ export async function POST(request) {
           title: 'Sample Paper',
           year: 2024,
           authors: ['Author'],
-          abstract: 'Sample abstract',
-          keywords: ['keyword1', 'keyword2'],
+          abstract: 'Sample',
+          keywords: ['k1'],
           primaryCategory: 'データサイエンス'
         }],
         message: '✅ デモモード'
       });
     }
 
-    // 本番モード
     console.log('Starting Drive scan...');
     const drive = await getDriveClient(accessToken);
     const files = await drive.files.list({
@@ -132,14 +157,14 @@ export async function POST(request) {
       fields: 'files(id, name)',
     });
 
-    console.log('Files found:', files.data.files?.length || 0);
+    console.log(`Files found: ${files.data.files?.length || 0}`);
 
     const papers = [];
 
     for (const file of files.data.files || []) {
       try {
         console.log(`Processing: ${file.name}`);
-        const metadata = await extractMetadataFromFilename(file.name);
+        const metadata = await extractMetadataWithClaude(file.name);
         
         papers.push({
           filename: file.name,
@@ -159,16 +184,15 @@ export async function POST(request) {
           title: file.name.replace('.pdf', ''),
           year: 'Error',
           authors: [],
-          abstract: 'エラーが発生しました',
+          abstract: 'Processing failed',
           keywords: [],
           primaryCategory: 'データサイエンス'
         });
       }
     }
 
-    console.log('Papers prepared:', papers.length);
+    console.log(`Papers prepared: ${papers.length}`);
 
-    // Sheets に保存
     let resultSpreadsheetId = spreadsheetId;
     const sheets = await getSheetsClient(accessToken);
 
@@ -209,7 +233,7 @@ export async function POST(request) {
       success: true,
       papers: papers,
       spreadsheetId: resultSpreadsheetId,
-      message: `✅ ${papers.length} 件のファイルを検出・メタデータを抽出・Google Sheets に保存しました。`,
+      message: `✅ ${papers.length} 件のファイルを検出・Google Sheets に保存しました。`,
       sheetsUrl: `https://docs.google.com/spreadsheets/d/${resultSpreadsheetId}/edit`
     });
 
