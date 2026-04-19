@@ -20,98 +20,101 @@ async function getSheetsClient(accessToken) {
   return google.sheets({ version: 'v4', auth: oauth2Client });
 }
 
-async function extractPDFText(drive, fileId) {
+async function extractMetadataWithClaude(pdfBuffer, filename) {
   try {
-    console.log('Downloading PDF...');
-    const response = await drive.files.get(
-      { fileId: fileId, alt: 'media' },
-      { responseType: 'arraybuffer' }
-    );
-
-    console.log('Extracting text from PDF...');
-    // Node.js 環境でのみ実行（require を使用）
-    const pdfParse = require('pdf-parse');
-    const pdfData = await pdfParse(response.data);
-    
-    return (pdfData.text || '').substring(0, 3000);
-  } catch (error) {
-    console.error('PDF extraction error:', error.message);
-    return '';
-  }
-}
-
-async function extractMetadataWithClaude(pdfText, filename) {
-  try {
-    if (!pdfText || pdfText.length === 0) {
-      return {
-        year: 'Unknown',
-        authors: [],
-        abstract: `論文: ${filename.replace('.pdf', '')}`,
-        keywords: []
-      };
-    }
+    console.log('Extracting metadata using Claude API...');
 
     const apiKey = process.env.ANTHROPIC_API_KEY;
     if (!apiKey) {
+      console.error('ANTHROPIC_API_KEY is not set');
       return {
         year: 'Unknown',
         authors: [],
         abstract: `論文: ${filename.replace('.pdf', '')}`,
-        keywords: []
+        keywords: [],
       };
     }
 
-    const prompt = `以下は論文PDFから抽出されたテキストです。JSON形式でメタデータを抽出：
+    // PDF を Base64 エンコード
+    const base64Pdf = pdfBuffer.toString('base64');
 
-【テキスト】
-${pdfText}
-
-【返答】JSON のみ
-{"year":"発行年","authors":["著者1"],"abstract":"概要","keywords":["k1","k2"]}`;
-
-    console.log('Calling Claude API...');
+    // Claude API に PDF を送信
     const response = await fetch('https://api.anthropic.com/v1/messages', {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
         'x-api-key': apiKey,
-        'anthropic-version': '2023-06-01'
+        'anthropic-version': '2023-06-01',
       },
       body: JSON.stringify({
         model: 'claude-opus-4-20250514',
-        max_tokens: 300,
-        messages: [{ role: 'user', content: prompt }]
-      })
+        max_tokens: 1024,
+        messages: [
+          {
+            role: 'user',
+            content: [
+              {
+                type: 'document',
+                source: {
+                  type: 'base64',
+                  media_type: 'application/pdf',
+                  data: base64Pdf,
+                },
+              },
+              {
+                type: 'text',
+                text: `このPDFから以下の情報をJSON形式で抽出してください：
+1. 論文の発行年（4桁の数字、わからなければ"Unknown"）
+2. 著者名（配列形式）
+3. 論文の概要（最大200文字）
+4. 主要なキーワード（5個まで、配列形式）
+
+【返答形式】JSON のみ返してください。説明は不要です。
+{
+  "year": "発行年",
+  "authors": ["著者1", "著者2"],
+  "abstract": "概要",
+  "keywords": ["キーワード1", "キーワード2"]
+}`,
+              },
+            ],
+          },
+        ],
+      }),
     });
 
     if (!response.ok) {
+      const error = await response.json();
+      console.error('Claude API error:', error);
       return {
         year: 'Unknown',
         authors: [],
         abstract: `論文: ${filename.replace('.pdf', '')}`,
-        keywords: []
+        keywords: [],
       };
     }
 
     const data = await response.json();
-    const text = data.content[0].text;
-    const jsonMatch = text.match(/\{[\s\S]*\}/);
-    
+    console.log('Claude response:', data.content[0].text);
+
+    // JSON を抽出
+    const jsonMatch = data.content[0].text.match(/\{[\s\S]*\}/);
     if (!jsonMatch) {
       return {
         year: 'Unknown',
         authors: [],
         abstract: `論文: ${filename.replace('.pdf', '')}`,
-        keywords: []
+        keywords: [],
       };
     }
 
     const metadata = JSON.parse(jsonMatch[0]);
+
     return {
       year: metadata.year || 'Unknown',
       authors: metadata.authors || [],
       abstract: metadata.abstract || '',
-      keywords: metadata.keywords || []
+      keywords: metadata.keywords || [],
     };
   } catch (error) {
     console.error('Metadata extraction error:', error.message);
@@ -119,7 +122,7 @@ ${pdfText}
       year: 'Unknown',
       authors: [],
       abstract: `論文: ${filename.replace('.pdf', '')}`,
-      keywords: []
+      keywords: [],
     };
   }
 }
@@ -129,8 +132,8 @@ async function createSpreadsheetWithSheet(sheets, spreadsheetName, sheetName) {
     const response = await sheets.spreadsheets.create({
       requestBody: {
         properties: { title: spreadsheetName },
-        sheets: [{ properties: { sheetId: 0, title: sheetName } }]
-      }
+        sheets: [{ properties: { sheetId: 0, title: sheetName } }],
+      },
     });
     return response.data.spreadsheetId;
   } catch (error) {
@@ -153,7 +156,7 @@ export async function POST(request) {
       return Response.json({
         success: true,
         papers: [{ filename: 'Sample.pdf', title: 'Sample', year: 2024, authors: ['Author'], abstract: 'Sample', keywords: ['k1'], primaryCategory: 'データサイエンス' }],
-        message: '✅ デモモード'
+        message: '✅ デモモード',
       });
     }
 
@@ -170,10 +173,16 @@ export async function POST(request) {
     const papers = [];
     for (const file of files.data.files || []) {
       try {
-        console.log(`Processing: ${file.name}`);
-        const pdfText = await extractPDFText(drive, file.id);
-        const metadata = await extractMetadataWithClaude(pdfText, file.name);
-        
+        console.log(`\nProcessing: ${file.name}`);
+
+        // PDF をダウンロード
+        console.log('Downloading PDF...');
+        const response = await drive.files.get({ fileId: file.id, alt: 'media' }, { responseType: 'arraybuffer' });
+        const pdfBuffer = Buffer.from(response.data);
+
+        // Claude API でメタデータ抽出
+        const metadata = await extractMetadataWithClaude(pdfBuffer, file.name);
+
         papers.push({
           filename: file.name,
           title: file.name.replace('.pdf', ''),
@@ -181,7 +190,7 @@ export async function POST(request) {
           authors: metadata.authors,
           abstract: metadata.abstract,
           keywords: metadata.keywords,
-          primaryCategory: 'データサイエンス'
+          primaryCategory: 'データサイエンス',
         });
         console.log(`✅ ${file.name}`);
       } catch (error) {
@@ -193,12 +202,12 @@ export async function POST(request) {
           authors: [],
           abstract: 'Processing failed',
           keywords: [],
-          primaryCategory: 'データサイエンス'
+          primaryCategory: 'データサイエンス',
         });
       }
     }
 
-    console.log(`Papers prepared: ${papers.length}`);
+    console.log(`\nPapers prepared: ${papers.length}`);
 
     let resultSpreadsheetId = spreadsheetId;
     const sheets = await getSheetsClient(accessToken);
@@ -212,10 +221,10 @@ export async function POST(request) {
       spreadsheetId: resultSpreadsheetId,
       range: `'${sheetName}'!A1:H1`,
       valueInputOption: 'RAW',
-      requestBody: { values: [headers] }
+      requestBody: { values: [headers] },
     });
 
-    const values = papers.map(p => [
+    const values = papers.map((p) => [
       new Date().toISOString().split('T')[0],
       p.title || '',
       p.year || '',
@@ -223,14 +232,14 @@ export async function POST(request) {
       p.abstract || '',
       Array.isArray(p.keywords) ? p.keywords.join('; ') : '',
       p.primaryCategory || '',
-      p.filename || ''
+      p.filename || '',
     ]);
 
     await sheets.spreadsheets.values.append({
       spreadsheetId: resultSpreadsheetId,
       range: `'${sheetName}'!A2`,
       valueInputOption: 'RAW',
-      requestBody: { values: values }
+      requestBody: { values: values },
     });
 
     console.log('✅ Completed\n');
@@ -240,9 +249,8 @@ export async function POST(request) {
       papers: papers,
       spreadsheetId: resultSpreadsheetId,
       message: `✅ ${papers.length} 件のファイルを検出・メタデータを抽出・Google Sheets に保存しました。`,
-      sheetsUrl: `https://docs.google.com/spreadsheets/d/${resultSpreadsheetId}/edit`
+      sheetsUrl: `https://docs.google.com/spreadsheets/d/${resultSpreadsheetId}/edit`,
     });
-
   } catch (error) {
     console.error('Error:', error.message);
     return Response.json({ error: error.message, success: false }, { status: 500 });
